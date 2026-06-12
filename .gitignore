@@ -1,0 +1,11 @@
+/__pycache__
+.vscode
+Clips
+datasets
+models
+runs
+test_images
+points_n.npy
+points.npy
+segmentPoints.npy
+temp.py
