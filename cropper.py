@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import os
 from main import DAR
+from helper import order_points, map_to_ad
 
 def show_image(img, save=False, imageName=None):
     cv2.imshow("Image", img)
@@ -30,24 +31,8 @@ h_subject, w_subject, c_subject = ad.shape
 # np.save("segmentPoints.npy", mask_binary)
 
 pts = np.load("points.npy")
-def map_to_ad(pt):
-    h_ad, w_ad = ad.shape[:2]
-
-    # Bounding box in pixel space (same space as pt1, pt2, pt3)
-    x_min = np.min(pts[:, 0])
-    x_max = np.max(pts[:, 0])
-    y_min = np.min(pts[:, 1])
-    y_max = np.max(pts[:, 1])
-
-    u = (pt[0] - x_min) / (x_max - x_min)
-    v = (pt[1] - y_min) / (y_max - y_min)
-    return [int(u * w_ad), int(v * h_ad)]
-
-pts_ad = []
-for pt in pts:
-    pts_ad.append(map_to_ad(pt))
-    
-pts_ad = np.array(pts_ad)
+print(pts)
+print(type(pts))
 
 def sort_pts(points):
     sorted_pts = np.zeros((4, 2), dtype="float32")
@@ -69,22 +54,9 @@ if mask_binary.max() == 1:
 
 mask_img = np.zeros_like(img)
 mask_img[mask_binary == 1] = [0,255,0]
-show_image(img)
 h_base, w_base, c_base = img.shape
 h_subject, w_subject = ad.shape[:2]
 
-def map_to_ad(pt):
-    h_ad, w_ad = ad.shape[:2]
-
-    # Bounding box in pixel space (same space as pt1, pt2, pt3)
-    x_min = np.min(pts[:, 0])
-    x_max = np.max(pts[:, 0])
-    y_min = np.min(pts[:, 1])
-    y_max = np.max(pts[:, 1])
-
-    u = (pt[0] - x_min) / (x_max - x_min)
-    v = (pt[1] - y_min) / (y_max - y_min)
-    return [int(u * w_ad), int(v * h_ad)]
 
 def get_mesh(pts, show_img=False):
     x, y, w, h = cv2.boundingRect(pts)
@@ -119,10 +91,12 @@ def get_mesh(pts, show_img=False):
         # cv2.line(img, pt1, pt2, (0,255,0), 1)
         # cv2.line(img, pt2, pt3, (0,255,0), 1)
         # cv2.line(img, pt3, pt1, (0,255,0), 1) 
+        print(pt1)
+        print(type(pt1))
 
-        src_pt1 = map_to_ad(pt1)
-        src_pt2 = map_to_ad(pt2)
-        src_pt3 = map_to_ad(pt3)
+        src_pt1 = map_to_ad(pts, pt1, ad)
+        src_pt2 = map_to_ad(pts, pt2, ad)
+        src_pt3 = map_to_ad(pts, pt3, ad)
         src_tri = np.float32([
             src_pt1,
             src_pt2,
@@ -130,20 +104,41 @@ def get_mesh(pts, show_img=False):
         ])
         ad_triangle_list.append([src_pt1, src_pt2, src_pt3])
     # show_image(img)
-    return triangle_list, np.array(ad_triangle_list)
+    return triangle_list, np.float32(ad_triangle_list)
+
+def check_inside(w_base, h_base, pt1, pt2, pt3):
+    if not (0 <= pt1[0] < w_base and 0 <= pt1[1] < h_base): return False
+    if not (0 <= pt2[0] < w_base and 0 <= pt2[1] < h_base): return False
+    if not (0 <= pt3[0] < w_base and 0 <= pt3[1] < h_base): return False
+
+    cx = (pt1[0] + pt2[0] + pt3[0]) // 3
+    cy = (pt1[1] + pt2[1] + pt3[1]) // 3
+
+    if mask_binary[cy, cx] == 0:
+        return False
+
+    return True
 
 triangle_pts, ad_triangle_list = get_mesh(pts)
-
-tri_contour = ad_triangle_list.reshape((-1, 1, 2))
-
-print(triangle_pts)
-print(ad_triangle_list)
+for t in triangle_pts:
+    pt1 = [int(t[0]), int(t[1])]
+    pt2 = [int(t[2]), int(t[3])]
+    pt3 = [int(t[4]), int(t[5])]
+    h_base, w_base, c_base = img.shape
+    if check_inside(w_base, h_base, pt1, pt2, pt3):
+        cv2.line(img, pt1, pt2, (255, 0, 0), 2)
+        cv2.line(img, pt2, pt3, (255, 0, 0), 2)
+        cv2.line(img, pt3, pt1, (255, 0, 0), 2)
+show_image(img)
 
 def warp_ad():
     triangle_pts, ad_triangle_list = get_mesh(pts)
+    h_ad, w_ad = ad.shape[:2]
+    ad_preview = ad.copy()
+    show_image(ad)
     x, y, w, h = cv2.boundingRect(pts)
     h_base, w_base, c_base = img.shape
-    h_ad, w_ad = ad.shape[:2]
+    
     roi = img[y:y+h, x:x+w]
     lab_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB)
 
@@ -153,53 +148,64 @@ def warp_ad():
         pt3 = [int(t[4]), int(t[5])]
 
         # Bounds check
-        if not (0 <= pt1[0] < w_base and 0 <= pt1[1] < h_base and
-                0 <= pt2[0] < w_base and 0 <= pt2[1] < h_base and
-                0 <= pt3[0] < w_base and 0 <= pt3[1] < h_base):
-            continue
+        if check_inside(w_base, h_base, pt1, pt2, pt3):
+            # Billboard triangle (destination)
+            dst_tri = np.float32([
+                pt1,
+                pt2,
+                pt3
+            ])
 
-        # Centroid inside mask check
-        cx = (pt1[0] + pt2[0] + pt3[0]) // 3
-        cy = (pt1[1] + pt2[1] + pt3[1]) // 3
-        if mask_binary[cy, cx] == 0:
-            continue
+            # Ad triangle (source)
+            src_pt1 = map_to_ad(pts, pt1, ad)
+            src_pt2 = map_to_ad(pts, pt2, ad)
+            src_pt3 = map_to_ad(pts, pt3, ad)
+            src_tri = np.float32([
+                src_pt1,
+                src_pt2,
+                src_pt3
+            ])
 
-        # Billboard triangle (destination)
-        dst_tri = np.float32([
-            pt1,
-            pt2,
-            pt3
-        ])
+            
+            tri_contour = ad_triangle_list.astype(np.int32).reshape((-1, 2))
+            hull_points = cv2.convexHull(tri_contour) # gets the contour of the mesh 
 
-        # Ad triangle (source)
-        src_pt1 = map_to_ad(pt1)
-        src_pt2 = map_to_ad(pt2)
-        src_pt3 = map_to_ad(pt3)
-        src_tri = np.float32([
-            src_pt1,
-            src_pt2,
-            src_pt3
-        ])
+            # Calculates the approx bounding box
+            hull_perimeter = cv2.arcLength(hull_points, True) 
+            epsilon = 0.03 * hull_perimeter
+            approx_vertices = cv2.approxPolyDP(hull_points, epsilon, True)
 
-        # cv2.line(roi, pt1, pt2, (0,255,0), 1)
-        # cv2.line(roi, pt2, pt3, (0,255,0), 1)
-        # cv2.line(roi, pt3, pt1, (0,255,0), 1)
-        h_roi, w_roi = roi.shape[:2]
-        tri_mask_binary = np.zeros((h_roi, w_roi), dtype=np.uint8)
-        show_image(tri_mask_binary)
-        cv2.fillPoly(tri_mask_binary, [dst_tri.astype(np.int32)], 255)
-        show_image(tri_mask_binary)
+            pts_src = np.float32([
+                [0, 0],
+                [w_ad - 1, 0],
+                [w_ad - 1, h_ad - 1],
+                [0, h_ad - 1]
+            ])
 
-        dst_tri_local = dst_tri - [x, y]
-        M = cv2.getAffineTransform(src_tri, dst_tri_local.astype(np.float32)) # gets perspective matrix
-        warped_ad = cv2.warpAffine(ad, M, (w, h))                  # warps according to local triangle
-        mask_poly = dst_tri_local.astype(np.int32)
+            pts_dst = np.array(order_points(approx_vertices.reshape(4,2)))
+            center = np.mean(pts_dst, axis=0)
 
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(mask, [mask_poly], 255)
-        cv2.copyTo(warped_ad, mask=mask, dst=roi) 
-        img[y:y+h, x:x+w] = roi
+            # 2. Shift to origin, scale up by 5% (1.05), and shift back
+            pts_dst_expanded = (pts_dst - center) * 1.05 + center
 
+            # 3. Cast back to int32 or float32 depending on what OpenCV needs next
+            pts_dst = pts_dst_expanded.astype(np.float32)
+
+            # warps the ad to the bounding box. 
+            matrix = cv2.getPerspectiveTransform(pts_src, pts_dst)
+            temp_ad = cv2.warpPerspective(ad_preview, matrix, (w_ad, h_ad))
+
+            dst_tri_local = dst_tri - [x, y]
+            M = cv2.getAffineTransform(src_tri, dst_tri_local.astype(np.float32)) # gets perspective matrix
+            warped_ad = cv2.warpAffine(temp_ad, M, (w, h))  # warps according to local triangle
+            mask_poly = dst_tri_local.astype(np.int32) # bringing the points to local ad shape
+
+            mask = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(mask, [mask_poly], 255)
+            cv2.copyTo(warped_ad, mask=mask, dst=roi) 
+            img[y:y+h, x:x+w] = roi
+    show_image(temp_ad)
+    show_image(warped_ad)
     show_image(img)
 
 warp_ad()
