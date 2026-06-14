@@ -1,5 +1,5 @@
 import numpy as np
-
+import cv2
 
 def map_to_ad(all_points, pt, ad_image):
     h_ad, w_ad = ad_image.shape[:2]
@@ -31,3 +31,24 @@ def order_points(pts):
     rect[3] = pts[np.argmax(diff)]
 
     return rect
+
+def show_image(img, save=False, imageName=None):
+    cv2.imshow("Image", img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    if save and imageName != None:
+        cv2.imwrite(f"{imageName}.png")
+
+def check_inside(w_base, h_base, pt1, pt2, pt3, mask_binary):
+    if not (0 <= pt1[0] < w_base and 0 <= pt1[1] < h_base): return False
+    if not (0 <= pt2[0] < w_base and 0 <= pt2[1] < h_base): return False
+    if not (0 <= pt3[0] < w_base and 0 <= pt3[1] < h_base): return False
+
+    cx = (pt1[0] + pt2[0] + pt3[0]) // 3
+    cy = (pt1[1] + pt2[1] + pt3[1]) // 3
+
+    if mask_binary[cy, cx] == 0:
+        return False
+
+    return True
