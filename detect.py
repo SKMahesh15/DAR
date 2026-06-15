@@ -1,7 +1,5 @@
 from ultralytics import YOLO
 from ultralytics import SAM
-import cv2
-import numpy as np
 
 class Detect:
     def __init__(self, image_path, model_path="/home/skm/Downloads/DAR/models/train9/weights/best.pt", sam_model_path="/home/skm/Downloads/DAR/models/sam2.1_l.pt"):
@@ -10,13 +8,12 @@ class Detect:
         self.image_path = image_path
 
     def bbox(self, image_path):
-        pred = self.model.predict(self.image_path)
+        pred = self.model.predict(image_path)
         boxes = pred[0].boxes
-        img = cv2.imread(image_path)
 
         # draw rectangle
         best_box = []
-        best_conf = 0.5  # threshold
+        best_conf = 0.25  # threshold (matches YOLO's default)
         best_area = 0
 
         if len(boxes) != 0:

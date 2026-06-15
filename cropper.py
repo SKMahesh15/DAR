@@ -2,13 +2,14 @@ import cv2
 import numpy as np
 import os
 from detect import Detect
-from helper import order_points, map_to_ad, show_image, check_inside
+from helper import order_points, map_to_ad, check_inside
 
 # ---- LOAD IMAGES ----
 class Cropper:
-    def __init__(self, image_original, ad_image):
+    def __init__(self, image_original, ad_image, detector=None):
         self.image_original = image_original
         self.ad_image = ad_image
+        self.detector = detector  # Reuse pre-loaded Detect object
         
         # Initialize the shared variables so all methods can see them
         self.img = None
@@ -21,33 +22,38 @@ class Cropper:
         self.w_ad = 0
         self.triangle_pts = None
         self.ad_triangle_list = None
+        self.if_found = None
 
     def process_ad(self):
-        img_path = os.path.join("test_images", self.image_original)
-        ad_path = os.path.join("test_images", self.ad_image)
-        self.img = cv2.imread(img_path)
-        self.ad  = cv2.imread(ad_path)
+        # Use paths directly as provided (already fully resolved by caller)
+        self.img = cv2.imread(self.image_original)
+        self.ad  = cv2.imread(self.ad_image)
 
         # ---- DETECTION + SEGMENTATION ----
-        obj = Detect(img_path)
-        best_box, best_conf, best_area, segment = obj.bbox(img_path)
+        # Reuse the pre-loaded detector if available, otherwise create a new one
+        obj = self.detector if self.detector else Detect(self.image_original)
+        best_box, best_conf, best_area, segment = obj.bbox(self.image_original)
         if segment:
+            self.if_found = True
             self.pts = np.array(segment[0].masks.xy[0])
             self.mask_binary = segment[0].masks.data[0].cpu().numpy()
+            self.mask_binary = self.mask_binary.astype(np.uint8)
+
+            if self.mask_binary.max() == 1:
+                self.mask_binary = self.mask_binary * 255
+
+            mask_img = np.zeros_like(self.img)
+            mask_img[self.mask_binary == 1] = [0,255,0]
+            self.h_base, self.w_base, c_base = self.img.shape
+            self.h_ad, self.w_ad = self.ad.shape[:2]
+
+            return self.w_ad, self.h_ad, self.h_base, self.w_base, self.mask_binary, self.if_found
         else:
             print("No Bill board found")
-            exit(0)
+            self.if_found = False
+            return self.w_ad, self.h_ad, self.h_base, self.w_base, self.mask_binary, self.if_found
 
-        self.mask_binary = self.mask_binary.astype(np.uint8)
-        if self.mask_binary.max() == 1:
-            self.mask_binary = self.mask_binary * 255
-
-        mask_img = np.zeros_like(self.img)
-        mask_img[self.mask_binary == 1] = [0,255,0]
-        self.h_base, self.w_base, c_base = self.img.shape
-        self.h_ad, self.w_ad = self.ad.shape[:2]
-
-        return self.w_ad, self.h_ad, self.h_base, self.w_base, self.mask_binary
+        
 
     def get_mesh(self, show_img=False):
         x, y, w, h = cv2.boundingRect(self.pts)
@@ -75,15 +81,7 @@ class Cropper:
                 src_pt1 = map_to_ad(self.pts, pt1, self.ad)
                 src_pt2 = map_to_ad(self.pts, pt2, self.ad)
                 src_pt3 = map_to_ad(self.pts, pt3, self.ad)
-                src_tri = np.float32([
-                    src_pt1,
-                    src_pt2,
-                    src_pt3
-                ])
                 ad_triangle_list.append([src_pt1, src_pt2, src_pt3])
-        
-        if show_img:
-            show_image(self.img)
             
         self.triangle_pts = triangle_list
         self.ad_triangle_list = np.float32(ad_triangle_list)
@@ -121,12 +119,8 @@ class Cropper:
         return temp_ad
 
     def warp_ad(self):
-        # process ad
-        self.process_ad()
         # We call get_mesh here safely inside the method
         self.get_mesh()
-        
-        show_image(self.ad)
         x, y, w, h = cv2.boundingRect(self.pts)
         
         roi = self.img[y:y+h, x:x+w]
@@ -167,9 +161,7 @@ class Cropper:
                 cv2.copyTo(warped_ad, mask=mask, dst=roi) 
                 self.img[y:y+h, x:x+w] = roi
 
-        show_image(temp_ad)
-        show_image(warped_ad)
-        show_image(self.img)
+        return self.img, warped_ad
 
 if __name__ == "__main__":
     img_path = os.path.join("bill1.png")
